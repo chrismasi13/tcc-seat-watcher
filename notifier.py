@@ -15,11 +15,12 @@ import ssl
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 STATE_FILE = Path(__file__).parent / "state.json"
 TZ = ZoneInfo("America/Chicago")
-SEARCH_LINK = "https://selfservice.tccd.edu/Student/Courses"
+SEARCH_BASE = "https://selfservice.tccd.edu/Student/Courses/Search"
 
 
 def _now():
@@ -51,6 +52,9 @@ def _smtp_settings():
             "Missing email settings: " + ", ".join(missing)
         )
     return {
+        # Use "or" not a default, because GitHub sets these to an EMPTY
+        # string when the secret does not exist, and an empty string would
+        # otherwise win over the default and crash int().
         "host": os.environ.get("SMTP_HOST") or "smtp.gmail.com",
         "port": int(os.environ.get("SMTP_PORT") or 465),
         "user": os.environ["SMTP_USER"],
@@ -81,22 +85,32 @@ def send_email(subject, body):
             server.send_message(msg)
 
 
+def section_link(section_name):
+    """
+    A link straight to that one section on the TCC site.
+    Searching the full section name returns only that section.
+    """
+    return SEARCH_BASE + "?keyword=" + quote(section_name)
+
+
 def _build_body(opened):
     when = _now().strftime("%A, %B %d, %Y at %I:%M %p %Z")
     lines = ["A seat opened up. Go register now.", ""]
     for info in opened:
-        lines.append(info["section"] + "  (" + (info.get("term") or "") + ")")
+        name = info["section"]
+        lines.append(name + "  (" + (info.get("term") or "") + ")")
         lines.append(
-            "    Open seats: {}  of {}".format(
+            "    Open seats: {} of {}".format(
                 info.get("open"), info.get("capacity")
             )
         )
         if info.get("instructor"):
             lines.append("    Instructor: " + info["instructor"])
+        lines.append("    " + section_link(name))
         lines.append("")
-    lines.append("Checked at " + when)
+    lines.append("On that page, click \"View Available Sections\" to see it.")
     lines.append("")
-    lines.append("Register here: " + SEARCH_LINK)
+    lines.append("Checked at " + when)
     lines.append("")
     lines.append("Seats can fill in minutes, so do not wait.")
     return "\n".join(lines)
