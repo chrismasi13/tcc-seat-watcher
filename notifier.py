@@ -28,6 +28,20 @@ STATE_FILE = Path(__file__).parent / "state.json"
 TZ = ZoneInfo("America/Chicago")
 SEARCH_BASE = "https://selfservice.tccd.edu/Student/Courses/Search"
 
+# How many times to alert about the SAME opening, in case you miss the
+# first one. Each extra alert goes out on the next check (about 5 minutes
+# later) and only if the seat is STILL open. Change with the
+# ALERT_REPEATS secret.
+DEFAULT_ALERT_REPEATS = 2
+
+
+def alert_repeats():
+    try:
+        n = int(os.environ.get("ALERT_REPEATS") or DEFAULT_ALERT_REPEATS)
+    except ValueError:
+        n = DEFAULT_ALERT_REPEATS
+    return max(1, n)
+
 
 def _now():
     return datetime.now(TZ)
@@ -175,9 +189,12 @@ def deliver(subject, body, click_url=None):
     return worked, results
 
 
-def _build_body(opened):
+def _build_body(opened, reminder=False):
     when = _now().strftime("%A, %B %d, %Y at %I:%M %p %Z")
-    lines = ["A seat opened up. Go register now.", ""]
+    if reminder:
+        lines = ["REMINDER. This seat is still open. Go register now.", ""]
+    else:
+        lines = ["A seat opened up. Go register now.", ""]
     for info in opened:
         name = info["section"]
         lines.append(name + "  (" + (info.get("term") or "") + ")")
@@ -206,10 +223,19 @@ def process_results(results, send=True):
     Returns a dict describing what happened.
     """
     state = load_state()
+    max_alerts = alert_repeats()
     opened = []
+    counts = {}
+    any_reminder = False
 
     for name, info in results.items():
-        prev_alerted = state.get(name, {}).get("alerted", False)
+        prev = state.get(name, {})
+        # How many alerts have already gone out for this same opening.
+        done = prev.get("alerts_sent")
+        if done is None:
+            # Older state files used a yes/no flag. Carry it over.
+            done = 1 if prev.get("alerted") else 0
+
         open_now = bool(
             info
             and (
@@ -218,14 +244,21 @@ def process_results(results, send=True):
             )
         )
 
-        if open_now and not prev_alerted:
+        if not open_now:
+            # Seat is gone or never opened. Start counting again next time.
+            done = 0
+        elif done < max_alerts:
             opened.append(info)
+            if done > 0:
+                any_reminder = True
+
+        counts[name] = done
 
         # Deliberately NO timestamp. In the cloud this file is saved back
         # to GitHub after each run, and a timestamp would change every
         # time, making thousands of pointless commits.
         state[name] = {
-            "alerted": open_now,
+            "alerts_sent": done,
             "open": (info or {}).get("open"),
             "capacity": (info or {}).get("capacity"),
             "term": (info or {}).get("term"),
@@ -239,26 +272,35 @@ def process_results(results, send=True):
     if opened and send:
         names = ", ".join(i["section"] for i in opened)
         click = section_link(opened[0]["section"])
+        prefix = "Still open: " if any_reminder else "Seat open: "
         try:
             sent, detail = deliver(
-                "Seat open: " + names, _build_body(opened), click
+                prefix + names,
+                _build_body(opened, reminder=any_reminder),
+                click,
             )
         except Exception as exc:
             error = str(exc)
 
-        if not sent:
-            # Nothing got through. Do not mark as alerted, so the next
-            # run tries again instead of losing the alert.
+        if sent:
+            # Count this alert so the next run knows whether a reminder
+            # is still owed.
+            for info in opened:
+                n = info["section"]
+                state[n]["alerts_sent"] = counts[n] + 1
+        else:
+            # Nothing got through. Leave the count alone so the next run
+            # tries again instead of losing the alert.
             if error is None:
                 error = "; ".join(
                     "%s %s" % (k, v) for k, v in detail.items()
                 )
-            for info in opened:
-                state[info["section"]]["alerted"] = False
 
     save_state(state)
     return {
         "opened": [i["section"] for i in opened],
+        "was_reminder": any_reminder,
+        "alerts_allowed": max_alerts,
         "email_sent": sent,
         "email_error": error,
         "delivery": detail,
