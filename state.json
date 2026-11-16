@@ -46,5 +46,13 @@
     "term": "2027 Spring",
     "status": "Open",
     "found": true
+  },
+  "BIOL-2402-31021": {
+    "alerts_sent": 1,
+    "open": 13,
+    "capacity": 24,
+    "term": "2027 Spring",
+    "status": "Open",
+    "found": true
   }
 }
