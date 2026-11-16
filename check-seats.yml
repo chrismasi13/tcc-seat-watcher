@@ -52,6 +52,8 @@ jobs:
           NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           NTFY_PRIORITY: ${{ secrets.NTFY_PRIORITY }}
+          # How many times to alert about the same opening
+          ALERT_REPEATS: ${{ secrets.ALERT_REPEATS }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: python check_once.py
 
