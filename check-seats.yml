@@ -3,7 +3,7 @@ name: Check TCC seats
 on:
   schedule:
     # Every 5 minutes. This is the fastest GitHub allows.
-    - cron: "*/5 * * * *"
+    - cron: "*/5 0-7,11-23 * * *"
   # Lets you press a button to run it right now.
   workflow_dispatch:
     inputs:
