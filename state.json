@@ -38,5 +38,13 @@
     "term": "2027 Spring",
     "status": "Open",
     "found": true
+  },
+  "BIOL-2402-84102": {
+    "alerted": true,
+    "open": 16,
+    "capacity": 23,
+    "term": "2027 Spring",
+    "status": "Open",
+    "found": true
   }
 }
