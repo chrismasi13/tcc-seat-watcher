@@ -2,11 +2,15 @@ name: Check TCC seats
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Every 5 minutes, except 08:00-10:59 UTC.
+    # That is the quiet overnight window: 2am-5am Central in winter,
+    # 3am-6am Central in summer. GitHub cron is UTC only and does not
+    # follow daylight saving, so the window shifts by an hour.
+    - cron: "*/5 0-7,11-23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Test run with no email sent"
+        description: "Test run with no alert sent"
         type: boolean
         default: false
 
@@ -42,6 +46,11 @@ jobs:
           ALERT_TO: ${{ secrets.ALERT_TO }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_PRIORITY: ${{ secrets.NTFY_PRIORITY }}
+          ALERT_REPEATS: ${{ secrets.ALERT_REPEATS }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: python check_once.py
 
