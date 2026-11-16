@@ -1,11 +1,15 @@
 """
-Sends the alert email, and remembers what it already sent.
+Sends the alert, and remembers what it already sent.
+
+Two ways to get alerted. You can use either one, or both:
+  - Email  (SMTP_USER, SMTP_PASSWORD, ALERT_TO)
+  - ntfy   (NTFY_TOPIC)  -> a push notification on your phone
 
 Rules:
-  - Email only when a section has 1 or more open seats.
+  - Alert only when a section has 1 or more open seats.
   - Send nothing when every section is full.
-  - Do not send the same alert twice. Only send again if the section
-    went back to 0 seats and then opened again.
+  - Do not alert twice. Only alert again if the section went back to
+    0 seats and then opened again.
 """
 
 import json
@@ -18,6 +22,8 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+import requests
+
 STATE_FILE = Path(__file__).parent / "state.json"
 TZ = ZoneInfo("America/Chicago")
 SEARCH_BASE = "https://selfservice.tccd.edu/Student/Courses/Search"
@@ -26,6 +32,13 @@ SEARCH_BASE = "https://selfservice.tccd.edu/Student/Courses/Search"
 def _now():
     return datetime.now(TZ)
 
+
+def section_link(section_name):
+    """A link straight to that one section on the TCC site."""
+    return SEARCH_BASE + "?keyword=" + quote(section_name)
+
+
+# ---------------------------------------------------------------- state
 
 def load_state():
     if STATE_FILE.exists():
@@ -40,21 +53,25 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+# ---------------------------------------------------------------- email
+
+def email_configured():
+    return all(
+        os.environ.get(k) for k in ("SMTP_USER", "SMTP_PASSWORD", "ALERT_TO")
+    )
+
+
 def _smtp_settings():
-    """Read email settings from environment variables."""
     missing = [
-        k
-        for k in ("SMTP_USER", "SMTP_PASSWORD", "ALERT_TO")
+        k for k in ("SMTP_USER", "SMTP_PASSWORD", "ALERT_TO")
         if not os.environ.get(k)
     ]
     if missing:
-        raise RuntimeError(
-            "Missing email settings: " + ", ".join(missing)
-        )
+        raise RuntimeError("Missing email settings: " + ", ".join(missing))
     return {
-        # Use "or" not a default, because GitHub sets these to an EMPTY
-        # string when the secret does not exist, and an empty string would
-        # otherwise win over the default and crash int().
+        # Use "or", not a default. GitHub sets these to an EMPTY string
+        # when the secret does not exist, and an empty string would
+        # otherwise beat the default and crash int().
         "host": os.environ.get("SMTP_HOST") or "smtp.gmail.com",
         "port": int(os.environ.get("SMTP_PORT") or 465),
         "user": os.environ["SMTP_USER"],
@@ -68,6 +85,7 @@ def send_email(subject, body):
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = cfg["user"]
+    # A comma separated ALERT_TO reaches several people.
     msg["To"] = cfg["to"]
     msg.set_content(body)
 
@@ -85,12 +103,76 @@ def send_email(subject, body):
             server.send_message(msg)
 
 
-def section_link(section_name):
+# ----------------------------------------------------------------- ntfy
+
+def ntfy_configured():
+    return bool((os.environ.get("NTFY_TOPIC") or "").strip())
+
+
+def _ascii(text):
+    """HTTP headers must be plain ASCII, so strip anything unusual."""
+    return text.encode("ascii", "replace").decode("ascii")
+
+
+def send_ntfy(subject, body, click_url=None):
+    topic = (os.environ.get("NTFY_TOPIC") or "").strip()
+    if not topic:
+        raise RuntimeError("NTFY_TOPIC is not set")
+
+    server = (os.environ.get("NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
+    headers = {
+        "Title": _ascii(subject),
+        # urgent makes the phone alert loudly, which is the point here.
+        "Priority": (os.environ.get("NTFY_PRIORITY") or "urgent").strip(),
+        "Tags": "rotating_light",
+    }
+    if click_url:
+        # Tapping the notification opens the class page.
+        headers["Click"] = click_url
+
+    token = (os.environ.get("NTFY_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = "Bearer " + token
+
+    r = requests.post(
+        server + "/" + topic,
+        data=body.encode("utf-8"),
+        headers=headers,
+        timeout=20,
+    )
+    r.raise_for_status()
+
+
+# ------------------------------------------------------------- delivery
+
+def deliver(subject, body, click_url=None):
     """
-    A link straight to that one section on the TCC site.
-    Searching the full section name returns only that section.
+    Try every alert method that is set up.
+    Returns (did_any_work, {method: result}).
     """
-    return SEARCH_BASE + "?keyword=" + quote(section_name)
+    if not email_configured() and not ntfy_configured():
+        raise RuntimeError(
+            "No alert method is set up. Add SMTP_USER, SMTP_PASSWORD and "
+            "ALERT_TO for email, or NTFY_TOPIC for phone notifications."
+        )
+
+    results = {}
+    if email_configured():
+        try:
+            send_email(subject, body)
+            results["email"] = "sent"
+        except Exception as exc:
+            results["email"] = "FAILED: " + str(exc)
+
+    if ntfy_configured():
+        try:
+            send_ntfy(subject, body, click_url)
+            results["ntfy"] = "sent"
+        except Exception as exc:
+            results["ntfy"] = "FAILED: " + str(exc)
+
+    worked = any(v == "sent" for v in results.values())
+    return worked, results
 
 
 def _build_body(opened):
@@ -108,7 +190,7 @@ def _build_body(opened):
             lines.append("    Instructor: " + info["instructor"])
         lines.append("    " + section_link(name))
         lines.append("")
-    lines.append("On that page, click \"View Available Sections\" to see it.")
+    lines.append('On that page, click "View Available Sections" to see it.')
     lines.append("")
     lines.append("Checked at " + when)
     lines.append("")
@@ -116,11 +198,12 @@ def _build_body(opened):
     return "\n".join(lines)
 
 
+# -------------------------------------------------------------- main job
+
 def process_results(results, send=True):
     """
     results: dict of section name -> info dict (or None)
-
-    Returns a dict describing what happened, so the web page can show it.
+    Returns a dict describing what happened.
     """
     state = load_state()
     opened = []
@@ -131,20 +214,16 @@ def process_results(results, send=True):
             info
             and (
                 info.get("unlimited")
-                or (
-                    isinstance(info.get("open"), int)
-                    and info["open"] >= 1
-                )
+                or (isinstance(info.get("open"), int) and info["open"] >= 1)
             )
         )
 
         if open_now and not prev_alerted:
             opened.append(info)
 
-        # Deliberately NO timestamp here. In the cloud this file is saved
-        # back to GitHub after each run, and a timestamp would change every
-        # single time, creating thousands of pointless commits. Only real
-        # changes in seats should cause a save.
+        # Deliberately NO timestamp. In the cloud this file is saved back
+        # to GitHub after each run, and a timestamp would change every
+        # time, making thousands of pointless commits.
         state[name] = {
             "alerted": open_now,
             "open": (info or {}).get("open"),
@@ -156,14 +235,24 @@ def process_results(results, send=True):
 
     sent = False
     error = None
+    detail = {}
     if opened and send:
         names = ", ".join(i["section"] for i in opened)
+        click = section_link(opened[0]["section"])
         try:
-            send_email("Seat open: " + names, _build_body(opened))
-            sent = True
-        except Exception as exc:  # keep the loop alive
+            sent, detail = deliver(
+                "Seat open: " + names, _build_body(opened), click
+            )
+        except Exception as exc:
             error = str(exc)
-            # Do not mark as alerted, so the next run tries again.
+
+        if not sent:
+            # Nothing got through. Do not mark as alerted, so the next
+            # run tries again instead of losing the alert.
+            if error is None:
+                error = "; ".join(
+                    "%s %s" % (k, v) for k, v in detail.items()
+                )
             for info in opened:
                 state[info["section"]]["alerted"] = False
 
@@ -172,5 +261,6 @@ def process_results(results, send=True):
         "opened": [i["section"] for i in opened],
         "email_sent": sent,
         "email_error": error,
+        "delivery": detail,
         "checked_at": _now().isoformat(),
     }
