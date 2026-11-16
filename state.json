@@ -14,5 +14,29 @@
     "term": "2027 Spring",
     "status": "Closed",
     "found": true
+  },
+  "BIOL-2402-86030": {
+    "alerted": false,
+    "open": 0,
+    "capacity": 24,
+    "term": "2027 Spring",
+    "status": "Closed",
+    "found": true
+  },
+  "BIOL-2402-86012": {
+    "alerted": false,
+    "open": 0,
+    "capacity": 24,
+    "term": "2027 Spring",
+    "status": "Closed",
+    "found": true
+  },
+  "BIOL-2402-84101": {
+    "alerted": false,
+    "open": 8,
+    "capacity": 24,
+    "term": "2027 Spring",
+    "status": "Open",
+    "found": true
   }
 }
