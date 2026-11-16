@@ -2,11 +2,15 @@ name: Check TCC seats
 
 on:
   schedule:
-    # Every 5 minutes, except 08:00-10:59 UTC.
-    # That is the quiet overnight window: 2am-5am Central in winter,
-    # 3am-6am Central in summer. GitHub cron is UTC only and does not
-    # follow daylight saving, so the window shifts by an hour.
-    - cron: "*/5 0-7,11-23 * * *"
+    # Every 5 minutes, but offset by 2 minutes.
+    # GitHub is busiest exactly on the hour and on round 5-minute marks,
+    # and it DROPS scheduled runs when busy. Asking at :02, :07, :12 and
+    # so on avoids the worst of that crowd.
+    #
+    # Hours 08:00-10:59 UTC are skipped. That is the quiet overnight
+    # window: 2am-5am Central in winter, 3am-6am in summer. GitHub cron
+    # is UTC only and does not follow daylight saving.
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 0-7,11-23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
