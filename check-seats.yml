@@ -1,0 +1,72 @@
+name: Check TCC seats
+
+on:
+  schedule:
+    # Every 5 minutes. This is the fastest GitHub allows.
+    - cron: "*/5 * * * *"
+  # Lets you press a button to run it right now.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Test run with no email sent"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Never let two checks run at the same time. If one is still going,
+# the next one waits instead of fighting over the state file.
+concurrency:
+  group: tcc-seat-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install what it needs
+        run: pip install -r requirements.txt
+
+      - name: Check the seats
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python check_once.py
+
+      - name: Remember what was already alerted
+        # Runs even if the step above failed, so a failed email is
+        # not marked as sent and will be retried next time.
+        if: always()
+        run: |
+          if [ -z "$(git status --porcelain state.json)" ]; then
+            echo "Nothing changed. No commit needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git commit -m "Update seat alert state [skip ci]"
+          # Another run may have pushed while we worked. Rebase on top of it.
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0
+            echo "Push attempt $i failed, trying again..."
+            sleep 5
+          done
+          echo "Could not save state. The next run will recheck from scratch."
+          exit 0
