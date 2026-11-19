@@ -1,35 +1,35 @@
 {
   "BIOL-2402-86005": {
     "alerts_sent": 0,
-    "open": 0,
-    "capacity": 24,
-    "term": "2027 Spring",
-    "status": "Closed",
-    "found": true
+    "open": null,
+    "capacity": null,
+    "term": null,
+    "status": null,
+    "found": false
   },
   "BIOL-2402-86006": {
     "alerts_sent": 0,
-    "open": 0,
-    "capacity": 24,
-    "term": "2027 Spring",
-    "status": "Closed",
-    "found": true
+    "open": null,
+    "capacity": null,
+    "term": null,
+    "status": null,
+    "found": false
   },
   "BIOL-2402-86030": {
     "alerts_sent": 0,
-    "open": 0,
-    "capacity": 24,
-    "term": "2027 Spring",
-    "status": "Closed",
-    "found": true
+    "open": null,
+    "capacity": null,
+    "term": null,
+    "status": null,
+    "found": false
   },
   "BIOL-2402-86012": {
     "alerts_sent": 0,
-    "open": 0,
-    "capacity": 24,
-    "term": "2027 Spring",
-    "status": "Closed",
-    "found": true
+    "open": null,
+    "capacity": null,
+    "term": null,
+    "status": null,
+    "found": false
   },
   "BIOL-2402-84101": {
     "alerted": true,
