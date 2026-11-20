@@ -1,0 +1,16 @@
+[Unit]
+Description=TCC Seat Watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tcc
+WorkingDirectory=/opt/tcc-seat-watcher
+EnvironmentFile=/etc/tcc-watcher.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tcc-seat-watcher/venv/bin/python watcher.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
