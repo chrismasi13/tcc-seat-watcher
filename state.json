@@ -54,5 +54,13 @@
     "term": "2027 Spring",
     "status": "Open",
     "found": true
+  },
+  "HIST-1301-82005": {
+    "alerts_sent": 1,
+    "open": 21,
+    "capacity": 30,
+    "term": "2027 Spring",
+    "status": "Open",
+    "found": true
   }
 }
