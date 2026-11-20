@@ -146,53 +146,27 @@
   </div>
 
   <div class="bar">
-    <button class="primary" id="btnRun">Check now</button>
-    <button id="btnRefresh">Refresh page</button>
-    <a class="btn" id="lnkActions" href="#" target="_blank" rel="noopener">Run history</a>
+    <button class="primary" id="btnRefresh">Refresh now</button>
   </div>
 
   <div id="msg"></div>
 
   <p class="note">
-    Seats come from your checker's last run, not live from TCC. TCC does not
-    let a web page read it directly. This page updates itself every 2 minutes.
+    Seats come from your watcher's last check on your server, not live from
+    TCC. This page updates itself every minute.
   </p>
-
-  <details id="setup">
-    <summary>One-click "Check now" setup</summary>
-    <div class="inner">
-      <p class="note" style="margin:0">
-        Without a token, "Check now" opens GitHub so you can press Run workflow
-        yourself. To make it one click, paste a GitHub token below. Make a
-        fine-grained token limited to this one repository, with
-        <b>Actions: Read and write</b> and nothing else. It is saved only in
-        this browser and is sent only to GitHub.
-      </p>
-      <input type="password" id="tok" placeholder="github_pat_..." autocomplete="off">
-      <div style="display:flex; gap:10px">
-        <button id="btnSave">Save token</button>
-        <button id="btnClear">Remove token</button>
-      </div>
-      <div id="tokState" class="note" style="margin:0"></div>
-    </div>
-  </details>
 
 </div>
 
 <script>
-const REPO = "chrismasi13/tcc-seat-watcher";
-const BRANCH = "main";
-const WORKFLOW = "check-seats.yml";
-const RAW = "https://raw.githubusercontent.com/" + REPO + "/" + BRANCH + "/";
-const API = "https://api.github.com/repos/" + REPO;
 const TCC = "https://selfservice.tccd.edu/Student/Courses/Search?keyword=";
-const KEY = "tccSeatWatchToken";
 
 const $ = function (id) { return document.getElementById(id); };
-$("lnkActions").href = "https://github.com/" + REPO + "/actions";
 
-function token() {
-  try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; }
+function esc(t) {
+  return String(t == null ? "" : t).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
 }
 function showMsg(text, kind) {
   $("msg").innerHTML = text ? '<div class="msg ' + (kind || "") + '">' + text + "</div>" : "";
@@ -205,35 +179,31 @@ function ago(iso) {
   const h = Math.round(mins / 60);
   return h === 1 ? "1 hour ago" : h + " hours ago";
 }
-async function getJSON(url, opts) {
-  const r = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
-}
 
-function render(list, state) {
+function render(list, sections) {
   const rows = $("rows");
   rows.innerHTML = "";
   let openCount = 0, seatTotal = 0;
 
   list.forEach(function (name) {
-    const s = state[name];
-    const found = s && s.found !== false;
+    const s = sections[name] || {};
+    const waiting = s.found === null || s.found === undefined;
+    const found = s.found === true;
     const open = found && typeof s.open === "number" ? s.open : null;
     const isOpen = open !== null && open >= 1;
     if (isOpen) { openCount += 1; seatTotal += open; }
 
     const row = document.createElement("div");
-    row.className = "row" + (isOpen ? " is-open" : found ? "" : " is-missing");
+    row.className = "row" + (isOpen ? " is-open" : (found || waiting) ? "" : " is-missing");
     row.innerHTML =
-      '<div><div class="id">' + name + "</div>" +
-      '<div class="term">' + ((s && s.term) || "Not on TCC right now") + "</div></div>" +
+      '<div><div class="id">' + esc(name) + "</div>" +
+      '<div class="term">' + esc(s.term || (waiting ? "Waiting for first check" : "Not on TCC right now")) + "</div></div>" +
       '<div class="spacer"></div>' +
       (found
-        ? '<div class="seats">' + open + ' <span class="cap">of ' + s.capacity + "</span></div>"
+        ? '<div class="seats">' + esc(open) + ' <span class="cap">of ' + esc(s.capacity) + "</span></div>"
         : '<div class="seats cap">–</div>') +
-      '<span class="pill ' + (isOpen ? "open" : found ? "" : "missing") + '">' +
-        (isOpen ? "Seat open" : found ? "Full" : "Not found") + "</span>" +
+      '<span class="pill ' + (isOpen ? "open" : (found || waiting) ? "" : "missing") + '">' +
+        (isOpen ? "Seat open" : found ? "Full" : waiting ? "Waiting" : "Not found") + "</span>" +
       '<a class="go" href="' + TCC + encodeURIComponent(name) +
         '" target="_blank" rel="noopener">Open on TCC</a>';
     rows.appendChild(row);
@@ -246,96 +216,33 @@ function render(list, state) {
 
 async function load() {
   try {
-    const bust = "?t=" + Date.now();
-    const results = await Promise.all([
-      getJSON(RAW + "watchlist.json" + bust),
-      getJSON(RAW + "state.json" + bust).catch(function () { return {}; })
-    ]);
-    render(results[0], results[1]);
-  } catch (e) {
-    $("rows").innerHTML = '<div class="msg bad">Could not read your watch list. ' +
-      "Check the repository is still public. (" + e.message + ")</div>";
-  }
+    const r = await fetch("status.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    render(d.watchlist || [], d.sections || {});
 
-  try {
-    const runs = await getJSON(API + "/actions/runs?per_page=1");
-    const r = runs.workflow_runs && runs.workflow_runs[0];
-    if (r) {
-      const bad = r.conclusion && r.conclusion !== "success";
-      $("checked").innerHTML = "Last checked <b>" + ago(r.created_at) + "</b>" +
-        (bad ? ' · <span style="color:var(--warn)">last run failed</span>' : "");
+    let text;
+    if (d.checked_at) {
+      text = "Last checked <b>" + ago(d.checked_at) + "</b>";
+      if (d.ok === false) text += ' · <span style="color:var(--warn)">last check had a problem</span>';
     } else {
-      $("checked").textContent = "No runs yet";
+      text = "No check yet";
     }
+    if (d.quiet_now) text += " · quiet hours (" + esc(d.quiet_hours) + ")";
+    if (d.interval) text += " · every " + esc(d.interval) + " seconds";
+    $("checked").innerHTML = text;
   } catch (e) {
-    $("checked").textContent = "Run time unavailable";
+    $("rows").innerHTML = '<div class="msg bad">Could not reach your watcher. ' +
+      "Open this page from your server address, for example " +
+      "http://YOUR-SERVER-IP:8080 (" + esc(e.message) + ")</div>";
+    $("checked").textContent = "No data";
   }
 }
 
-async function runNow() {
-  const t = token();
-  if (!t) {
-    showMsg('No token saved, so GitHub will open in a new tab. Press the green ' +
-            '<b>Run workflow</b> button there. To make this one click, open ' +
-            '"One-click Check now setup" below.', "");
-    window.open("https://github.com/" + REPO + "/actions/workflows/" + WORKFLOW, "_blank", "noopener");
-    return;
-  }
-  const btn = $("btnRun");
-  btn.disabled = true; btn.textContent = "Starting…";
-  try {
-    const r = await fetch(API + "/actions/workflows/" + WORKFLOW + "/dispatches", {
-      method: "POST",
-      headers: {
-        "Accept": "application/vnd.github+json",
-        "Authorization": "Bearer " + t,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ ref: BRANCH })
-    });
-    if (r.status === 204) {
-      showMsg("Check started. It takes about 20 seconds. This page will update itself.", "good");
-      let tries = 0;
-      const timer = setInterval(function () {
-        tries += 1; load();
-        if (tries >= 6) clearInterval(timer);
-      }, 10000);
-    } else if (r.status === 401 || r.status === 403) {
-      showMsg("GitHub refused the token. Check it has <b>Actions: Read and write</b> " +
-              "on this repository and has not expired.", "bad");
-    } else {
-      showMsg("GitHub answered " + r.status + ". The check did not start.", "bad");
-    }
-  } catch (e) {
-    showMsg("Could not reach GitHub: " + e.message, "bad");
-  } finally {
-    btn.disabled = false; btn.textContent = "Check now";
-  }
-}
-
-function tokState() {
-  $("tokState").textContent = token()
-    ? "A token is saved in this browser. Check now runs in one click."
-    : "No token saved. Check now will open GitHub instead.";
-}
-
-$("btnRun").addEventListener("click", runNow);
 $("btnRefresh").addEventListener("click", function () { showMsg(""); load(); });
-$("btnSave").addEventListener("click", function () {
-  const v = $("tok").value.trim();
-  if (!v) { showMsg("Paste a token first.", "bad"); return; }
-  try { localStorage.setItem(KEY, v); $("tok").value = ""; tokState();
-        showMsg("Token saved in this browser.", "good"); }
-  catch (e) { showMsg("This browser refused to save it.", "bad"); }
-});
-$("btnClear").addEventListener("click", function () {
-  try { localStorage.removeItem(KEY); } catch (e) {}
-  tokState(); showMsg("Token removed.", "");
-});
 
-tokState();
 load();
-setInterval(load, 120000);
+setInterval(load, 60000);
 </script>
 </body>
 </html>

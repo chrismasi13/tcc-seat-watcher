@@ -14,6 +14,10 @@ Settings (all optional):
                           watchlist.json in your GitHub repo. Use "off" to
                           use only the file on this server.
 
+  STATUS_PORT             Port for your status web page. Default 8080.
+                          Open  http://YOUR-SERVER-IP:8080  in a browser.
+                          Use "off" to turn the page off.
+
 Before each check, the watcher reads watchlist.json from GitHub. To add or
 remove a class, edit watchlist.json on GitHub. The server picks it up on a
 later check (GitHub can take about 5 minutes to show a new version).
@@ -31,16 +35,26 @@ import json
 import os
 import random
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
 
 TZ = ZoneInfo("America/Chicago")
-WATCHLIST_FILE = Path(__file__).parent / "watchlist.json"
+HERE = Path(__file__).parent
+WATCHLIST_FILE = HERE / "watchlist.json"
+STATE_FILE = HERE / "state.json"
+PAGE_FILE = HERE / "index.html"
+DEFAULT_PORT = 8080
+
+# What the status page shows about the last check.
+STATUS = {"checked_at": None, "ok": None, "interval": None,
+          "quiet_hours": None, "quiet_now": False}
 DEFAULT_WATCHLIST_URL = (
     "https://raw.githubusercontent.com/chrismasi13/tcc-seat-watcher/"
     "main/watchlist.json"
@@ -102,6 +116,101 @@ def wait_after(interval, failures):
         return interval
     longest = max(MAX_BACKOFF, interval)
     return min(interval * (2 ** failures), longest)
+
+
+def build_status(watchlist_file=WATCHLIST_FILE, state_file=STATE_FILE):
+    """Everything the web page needs, as one dictionary."""
+    try:
+        raw_list = json.loads(Path(watchlist_file).read_text())
+    except (OSError, ValueError):
+        raw_list = []
+    names = []
+    for item in raw_list:
+        name = str(item).strip().upper()
+        if name and not name.startswith("#"):
+            names.append(name)
+    try:
+        state = json.loads(Path(state_file).read_text())
+    except (OSError, ValueError):
+        state = {}
+    sections = {}
+    for name in names:
+        s = state.get(name) or {}
+        sections[name] = {
+            "found": s.get("found", False) if s else None,
+            "open": s.get("open"),
+            "capacity": s.get("capacity"),
+            "term": s.get("term"),
+            "status": s.get("status"),
+        }
+    out = dict(STATUS)
+    out["watchlist"] = names
+    out["sections"] = sections
+    return out
+
+
+class StatusHandler(BaseHTTPRequestHandler):
+    """Serves exactly two things: the page and its data. Nothing else."""
+
+    def _send(self, code, ctype, body):
+        data = body if isinstance(body, bytes) else body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        try:
+            if path in ("/", "/index.html"):
+                self._send(200, "text/html; charset=utf-8",
+                           PAGE_FILE.read_bytes())
+            elif path == "/status.json":
+                self._send(200, "application/json",
+                           json.dumps(build_status()))
+            else:
+                self._send(404, "text/plain; charset=utf-8", "Not found")
+        except Exception as exc:
+            self._send(500, "text/plain; charset=utf-8",
+                       "Error: %s" % exc)
+
+    def log_message(self, *args):
+        pass   # keep the log clean
+
+
+def read_port(raw):
+    raw = (raw or "").strip().lower()
+    if not raw:
+        return DEFAULT_PORT
+    if raw in ("off", "none", "no"):
+        return None
+    try:
+        port = int(raw)
+        if not 1 <= port <= 65535:
+            raise ValueError
+        return port
+    except ValueError:
+        print("STATUS_PORT must be a number like 8080 or off, got %r. "
+              "Using %d." % (raw, DEFAULT_PORT))
+        return DEFAULT_PORT
+
+
+def start_status_server(port, host="0.0.0.0"):
+    """Start the web page in the background. Returns the server or None."""
+    if port is None:
+        return None
+    try:
+        server = ThreadingHTTPServer((host, port), StatusHandler)
+    except OSError as exc:
+        print("Could not start the status page on port %s (%s). "
+              "Checking continues without it." % (port, exc))
+        return None
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print("Status page is on port %d." % server.server_address[1])
+    return server
 
 
 def read_watchlist_url(raw):
@@ -180,6 +289,8 @@ def loop(interval, quiet, run=run_one_check, sleep=time.sleep,
          now=lambda: datetime.now(TZ), max_rounds=None, jitter=True):
     failures = 0
     rounds = 0
+    STATUS["interval"] = interval
+    STATUS["quiet_hours"] = None if quiet is None else "%d-%d" % quiet
     while max_rounds is None or rounds < max_rounds:
         rounds += 1
         started = time.monotonic()
@@ -187,10 +298,14 @@ def loop(interval, quiet, run=run_one_check, sleep=time.sleep,
 
         if in_quiet_hours(quiet, now()):
             print("[%s] Quiet hours. No check." % stamp)
+            STATUS["quiet_now"] = True
             wait = interval
         else:
             print("[%s] Checking..." % stamp)
+            STATUS["quiet_now"] = False
             ok = run()
+            STATUS["checked_at"] = now().isoformat()
+            STATUS["ok"] = bool(ok)
             failures = 0 if ok else failures + 1
             wait = wait_after(interval, failures)
             if failures:
@@ -212,6 +327,7 @@ def main():
           % (interval, "none" if quiet is None else "%d-%d" % quiet))
     print("Watch list source: %s" % (
         read_watchlist_url(os.environ.get("WATCHLIST_URL")) or "this server only"))
+    start_status_server(read_port(os.environ.get("STATUS_PORT")))
     loop(interval, quiet)
 
 
